@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Runtime / generated files
+uploads/
+data/
+static/socket.io.min.js
+intellitrack_events.db
+*.db
+
+# YOLOv8 weights (downloaded automatically on first run)
+*.pt
+*.onnx
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+
+# Logs
+*.log

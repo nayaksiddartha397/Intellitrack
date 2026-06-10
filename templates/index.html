@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>IntelliTrack — Real-Time Object Detection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <script src="/static/socket.io.min.js"
+    onerror="var s=document.createElement('script');s.src='https://cdn.socket.io/4.6.0/socket.io.min.js';document.head.appendChild(s);this.remove();">
+  </script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #07090e;
+      --surface:     #0f1623;
+      --surface2:    #18222f;
+      --surface3:    #1f2d3f;
+      --border:      rgba(34,211,238,.14);
+      --border-h:    rgba(34,211,238,.4);
+      --cyan:        #22d3ee;
+      --cyan-dim:    rgba(34,211,238,.10);
+      --green:       #10b981;
+      --red:         #ef4444;
+      --amber:       #f59e0b;
+      --text:        #f1f5f9;
+      --text-dim:    #94a3b8;
+      --text-muted:  #475569;
+      --font:        'Outfit', sans-serif;
+      --mono:        'JetBrains Mono', monospace;
+      --header-h:    56px;
+      --footer-h:    62px;
+      --tl-h:        0px;   /* expands to 52px when a file is loaded */
+      --r:           10px;
+      --r-sm:        6px;
+    }
+
+    html, body {
+      height: 100%; overflow: hidden;
+      background: var(--bg); color: var(--text);
+      font-family: var(--font); font-size: 13px;
+    }
+    body {
+      background-image:
+        linear-gradient(rgba(34,211,238,.016) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(34,211,238,.016) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+
+    /* ── Header ──────────────────────────────────────────────────── */
+    header {
+      height: var(--header-h);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 20px; gap: 14px;
+      background: rgba(7,9,14,.96);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 50;
+    }
+
+    .logo { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .logo-icon {
+      width: 32px; height: 32px;
+      border: 1.5px solid var(--cyan); border-radius: 8px;
+      background: var(--cyan-dim);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .logo-icon svg { width: 15px; height: 15px; color: var(--cyan); }
+    .logo-name { font-size: 15px; font-weight: 700; letter-spacing: .09em; }
+    .logo-name em { color: var(--cyan); font-style: normal; }
+
+    /* Source toggle */
+    .src-toggle {
+      display: flex; align-items: center; gap: 5px;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--r); padding: 4px;
+    }
+    .src-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 7px;
+      border: none; cursor: pointer;
+      font-family: var(--font); font-size: 12px; font-weight: 600;
+      color: var(--text-muted); background: transparent;
+      transition: all .2s;
+    }
+    .src-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .src-btn:hover { color: var(--text); background: var(--surface3); }
+    .src-btn.active {
+      background: var(--cyan); color: #000;
+      box-shadow: 0 0 14px rgba(34,211,238,.35);
+    }
+    .src-btn.active svg { color: #000; }
+
+    #file-input { display: none; }
+
+    /* Status pill only (FPS pill removed) */
+    .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+    .pill {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 12px; border-radius: 100px;
+      background: var(--surface); border: 1px solid var(--border);
+      font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--text-muted); flex-shrink: 0; transition: all .4s;
+    }
+    .dot.live    { background: var(--green); box-shadow: 0 0 8px var(--green); animation: blink .9s ease-in-out infinite; }
+    .dot.polling { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+    .dot.err     { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+    /* ── Main video area ─────────────────────────────────────────── */
+    .main {
+      height: calc(100vh - var(--header-h) - var(--footer-h));
+      padding: 12px 14px 8px;
+      display: flex; flex-direction: column; gap: 8px;
+    }
+
+    .video-wrap {
+      flex: 1; position: relative;
+      background: #000;
+      border-radius: var(--r);
+      border: 1px solid var(--border);
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 0;
+    }
+
+    #feed { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+    /* Object count badge — top-right of video */
+    .obj-badge {
+      position: absolute; top: 12px; right: 14px;
+      display: flex; align-items: baseline; gap: 5px;
+      background: rgba(7,9,14,.78);
+      border: 1px solid var(--border-h);
+      backdrop-filter: blur(8px);
+      border-radius: 8px; padding: 6px 13px;
+      pointer-events: none;
+    }
+    .obj-num {
+      font-family: var(--mono); font-size: 22px; font-weight: 500;
+      color: var(--cyan); line-height: 1;
+    }
+    .obj-lbl {
+      font-family: var(--mono); font-size: 10px;
+      color: var(--text-dim); letter-spacing: .06em;
+    }
+
+    /* Source chip — top-left */
+    .src-chip {
+      position: absolute; top: 12px; left: 14px;
+      font-family: var(--mono); font-size: 10px;
+      padding: 4px 10px; border-radius: 6px;
+      background: rgba(7,9,14,.78);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(8px);
+      color: var(--text-dim); letter-spacing: .05em;
+      pointer-events: none;
+    }
+
+    /* ── Scan complete overlay (full video overlay) ──────────────── */
+    .scan-complete-overlay {
+      position: absolute; inset: 0;
+      background: rgba(7,9,14,.55);
+      backdrop-filter: blur(2px);
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 14px; pointer-events: none;
+    }
+    .scan-complete-overlay.visible { display: flex; }
+
+    .scan-badge {
+      display: flex; align-items: center; gap: 10px;
+      background: rgba(16,185,129,.18);
+      border: 1.5px solid var(--green);
+      border-radius: var(--r); padding: 14px 28px;
+      animation: badgePop .4s cubic-bezier(.16,1,.3,1);
+    }
+    @keyframes badgePop {
+      from { opacity: 0; transform: scale(.85); }
+      to   { opacity: 1; transform: scale(1); }
+    }
+    .scan-check {
+      width: 28px; height: 28px;
+      background: var(--green); border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .scan-check svg { width: 15px; height: 15px; color: #000; }
+    .scan-text { font-size: 17px; font-weight: 700; color: var(--green); letter-spacing: .04em; }
+    .scan-sub  { font-family: var(--mono); font-size: 11px; color: var(--text-dim); letter-spacing: .06em; }
+
+    /* ── Upload overlay ──────────────────────────────────────────── */
+    .upload-overlay {
+      position: absolute; inset: 0;
+      background: rgba(7,9,14,.72);
+      backdrop-filter: blur(4px);
+      display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px;
+    }
+    .upload-overlay.visible { display: flex; }
+    .upload-spinner {
+      width: 42px; height: 42px;
+      border: 3px solid var(--surface3);
+      border-top-color: var(--cyan);
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .upload-msg  { font-family: var(--mono); font-size: 12px; color: var(--cyan); letter-spacing: .08em; }
+    .upload-prog { font-family: var(--mono); font-size: 11px; color: var(--text-muted); }
+
+    /* ── Video timeline ──────────────────────────────────────────── */
+    .timeline {
+      display: none;   /* shown only when is_file = true */
+      flex-direction: column; gap: 5px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--r);
+      padding: 10px 16px;
+      flex-shrink: 0;
+    }
+    .timeline.visible { display: flex; }
+
+    .tl-top {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .tl-time {
+      font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+      letter-spacing: .04em;
+    }
+    .tl-status {
+      display: flex; align-items: center; gap: 6px;
+      font-family: var(--mono); font-size: 10px;
+      letter-spacing: .1em; text-transform: uppercase;
+    }
+    .tl-status-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--cyan);
+      animation: blink .6s ease-in-out infinite;
+    }
+    .tl-status.done .tl-status-dot {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: none;
+    }
+    .tl-status-text { color: var(--text-dim); }
+    .tl-status.done .tl-status-text { color: var(--green); }
+
+    /* Progress bar track */
+    .tl-track {
+      height: 6px;
+      background: var(--surface3);
+      border-radius: 3px;
+      overflow: hidden;
+      cursor: default;
+    }
+    .tl-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, var(--cyan), #38eeff);
+      border-radius: 3px;
+      transition: width .3s linear;
+    }
+    .tl-fill.done {
+      background: linear-gradient(90deg, var(--green), #34d399);
+      transition: width .6s cubic-bezier(.16,1,.3,1);
+    }
+
+    /* Frame counter tick marks (decorative) */
+    .tl-ticks {
+      display: flex; justify-content: space-between;
+      padding: 0 1px;
+    }
+    .tl-tick {
+      width: 1px; height: 4px;
+      background: var(--surface3); border-radius: 1px;
+    }
+
+    /* ── Controls footer ─────────────────────────────────────────── */
+    footer {
+      height: var(--footer-h);
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(7,9,14,.96);
+      backdrop-filter: blur(14px);
+      border-top: 1px solid var(--border);
+      padding: 0 24px; gap: 0;
+      flex-shrink: 0;
+    }
+
+    .ctrl-group {
+      display: flex; align-items: center; gap: 10px;
+      padding: 0 24px;
+    }
+    .ctrl-group + .ctrl-group { border-left: 1px solid var(--border); }
+    .ctrl-lbl {
+      font-family: var(--mono); font-size: 10px;
+      letter-spacing: .1em; text-transform: uppercase;
+      color: var(--text-muted); flex-shrink: 0; width: 58px;
+    }
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 130px; height: 4px;
+      background: var(--surface3); border-radius: 2px;
+      outline: none; cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--cyan); box-shadow: 0 0 7px rgba(34,211,238,.5);
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--cyan); border: none;
+    }
+    .ctrl-val {
+      font-family: var(--mono); font-size: 12px;
+      color: var(--cyan); min-width: 30px; text-align: right;
+    }
+
+    /* Export button — pulses green when scan is complete */
+    .export-btn {
+      display: flex; align-items: center; gap: 7px;
+      padding: 8px 18px; border-radius: var(--r-sm);
+      background: var(--cyan); color: #000;
+      border: none; cursor: pointer;
+      font-family: var(--font); font-size: 13px; font-weight: 600;
+      transition: all .2s; white-space: nowrap;
+    }
+    .export-btn svg { width: 13px; height: 13px; }
+    .export-btn:hover { background: #38eeff; transform: translateY(-1px); box-shadow: 0 0 16px rgba(34,211,238,.4); }
+    .export-btn:active { transform: none; }
+    .export-btn.pulse {
+      background: var(--green);
+      animation: exportPulse 1.4s ease-in-out infinite;
+    }
+    @keyframes exportPulse {
+      0%,100% { box-shadow: 0 0 0   0   rgba(16,185,129,.5); }
+      50%      { box-shadow: 0 0 20px 6px rgba(16,185,129,.4); }
+    }
+
+    @media (max-width: 720px) {
+      footer { flex-wrap: wrap; height: auto; padding: 10px; gap: 8px; }
+      .ctrl-group { padding: 0 8px; border: none !important; }
+      input[type=range] { width: 90px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+    </div>
+    <span class="logo-name">INTELLI<em>TRACK</em></span>
+  </div>
+
+  <!-- Webcam / Upload toggle -->
+  <div class="src-toggle">
+    <button class="src-btn active" id="btn-webcam" onclick="switchToWebcam()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M23 7 16 12l7 5V7z"/>
+        <rect x="1" y="5" width="15" height="14" rx="2"/>
+      </svg>
+      Webcam
+    </button>
+    <button class="src-btn" id="btn-file" onclick="switchToFile()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+      Upload Video
+    </button>
+  </div>
+
+  <input type="file" id="file-input" accept="video/*" onchange="handleFileUpload(this)"/>
+
+  <div class="header-right">
+    <div class="pill">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">Connecting…</span>
+    </div>
+  </div>
+</header>
+
+<!-- ── Video + Timeline ─────────────────────────────────────────── -->
+<div class="main">
+
+  <div class="video-wrap" id="video-wrap">
+    <img id="feed" src="/video_feed" alt="Live detection feed"/>
+
+    <!-- Source label chip — top-left -->
+    <div class="src-chip" id="src-chip">📷 WEBCAM</div>
+
+    <!-- Object count badge — top-right -->
+    <div class="obj-badge">
+      <span class="obj-num" id="obj-num">0</span>
+      <span class="obj-lbl">OBJECTS</span>
+    </div>
+
+    <!-- Scan complete overlay — appears when video file finishes -->
+    <div class="scan-complete-overlay" id="scan-overlay">
+      <div class="scan-badge">
+        <div class="scan-check">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+        <div>
+          <div class="scan-text">SCAN COMPLETE</div>
+          <div class="scan-sub" id="scan-sub">Export your CSV to review all detections</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload progress overlay -->
+    <div class="upload-overlay" id="upload-overlay">
+      <div class="upload-spinner"></div>
+      <div class="upload-msg">UPLOADING VIDEO…</div>
+      <div class="upload-prog" id="upload-prog">0%</div>
+    </div>
+  </div>
+
+  <!-- Timeline — hidden for webcam, shown for video files -->
+  <div class="timeline" id="timeline">
+    <div class="tl-top">
+      <span class="tl-time" id="tl-time">00:00 / 00:00</span>
+      <span class="tl-status" id="tl-status">
+        <span class="tl-status-dot"></span>
+        <span class="tl-status-text" id="tl-status-text">SCANNING</span>
+      </span>
+    </div>
+    <div class="tl-track">
+      <div class="tl-fill" id="tl-fill"></div>
+    </div>
+    <div class="tl-ticks" id="tl-ticks"></div>
+  </div>
+
+</div>
+
+<!-- ── Footer controls ───────────────────────────────────────────── -->
+<footer>
+  <div class="ctrl-group">
+    <span class="ctrl-lbl">Conf</span>
+    <input type="range" id="conf-slider"
+           min="0.05" max="0.95" step="0.05" value="0.40"
+           oninput="updateConf(this.value)"/>
+    <span class="ctrl-val" id="conf-val">0.40</span>
+  </div>
+
+  <div class="ctrl-group">
+    <span class="ctrl-lbl">IoU NMS</span>
+    <input type="range" id="iou-slider"
+           min="0.10" max="0.90" step="0.05" value="0.45"
+           oninput="updateIou(this.value)"/>
+    <span class="ctrl-val" id="iou-val">0.45</span>
+  </div>
+
+  <div class="ctrl-group">
+    <button class="export-btn" id="export-btn"
+            onclick="window.location.href='/api/export'">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Export CSV
+    </button>
+  </div>
+</footer>
+
+
+<!-- ── Jinja2 data (Flask fills this before delivery) ─────────────── -->
+<script>
+const CLASS_COLOR_MAP = {{ class_color_map | tojson | safe }};
+const COCO_CLASSES    = {{ coco_classes    | tojson | safe }};
+</script>
+
+<!-- ── App JS ─────────────────────────────────────────────────────── -->
+<script>
+"use strict";
+
+/* ── Socket.io (polling — werkzeug threading has no WebSocket) ── */
+let socketLive = false;
+
+const socket = io({
+  transports: ["polling"],
+  reconnectionAttempts: 20,
+  reconnectionDelay: 1000,
+  timeout: 8000,
+});
+
+socket.on("connect",       () => { socketLive = true;  setStatus("live",    "Live"); });
+socket.on("disconnect",    () => { socketLive = false; setStatus("polling", "Reconnecting…"); });
+socket.on("connect_error", () => setStatus("err", "Socket error"));
+socket.on("stats", onStats);
+
+/* REST fallback — every 350 ms while socket isn't connected */
+setInterval(async () => {
+  if (socketLive) return;
+  try {
+    const r = await fetch("/api/stats");
+    if (r.ok) {
+      const d = await r.json();
+      if (d && d.fps !== undefined) { onStats(d); setStatus("polling", "Polling"); }
+    }
+  } catch {}
+}, 350);
+
+function setStatus(cls, text) {
+  document.getElementById("status-dot").className    = "dot " + cls;
+  document.getElementById("status-text").textContent = text;
+}
+
+/* ── Stats handler ───────────────────────────────────────────────── */
+let _scanDone = false;  /* latch — once true, stays true until new source */
+
+function onStats(data) {
+  /* Object count */
+  document.getElementById("obj-num").textContent = data.total || 0;
+
+  /* Video progress */
+  const vid = data.video || {};
+  if (vid.is_file) {
+    showTimeline(vid);
+    if (vid.done && !_scanDone) onScanComplete(vid);
+  }
+}
+
+/* ── Timeline ────────────────────────────────────────────────────── */
+function showTimeline(vid) {
+  const tl      = document.getElementById("timeline");
+  const fill    = document.getElementById("tl-fill");
+  const timeEl  = document.getElementById("tl-time");
+  const status  = document.getElementById("tl-status");
+  const statTxt = document.getElementById("tl-status-text");
+
+  tl.classList.add("visible");
+
+  const cur   = vid.current_frame || 0;
+  const total = vid.total_frames  || 1;
+  const vfps  = vid.video_fps     || 30;
+  const pct   = Math.min(100, (cur / total) * 100).toFixed(2);
+
+  fill.style.width = pct + "%";
+  if (vid.done) fill.classList.add("done");
+
+  timeEl.textContent = toTime(cur, vfps) + " / " + toTime(total, vfps);
+
+  if (vid.done) {
+    status.classList.add("done");
+    statTxt.textContent = "COMPLETE";
+  } else {
+    status.classList.remove("done");
+    statTxt.textContent = "SCANNING";
+  }
+
+  /* Build tick marks once */
+  const ticks = document.getElementById("tl-ticks");
+  if (!ticks.children.length) {
+    const n = 40;
+    ticks.innerHTML = Array(n).fill('<span class="tl-tick"></span>').join("");
+  }
+}
+
+/* ── Scan complete ───────────────────────────────────────────────── */
+function onScanComplete(vid) {
+  _scanDone = true;
+
+  /* Show overlay on video */
+  const overlay = document.getElementById("scan-overlay");
+  overlay.classList.add("visible");
+
+  /* Update sub-text */
+  const frames = vid.total_frames || 0;
+  const vfps   = vid.video_fps    || 30;
+  document.getElementById("scan-sub").textContent =
+    `${frames.toLocaleString()} frames scanned · ${toTime(frames, vfps)} · Export CSV to review`;
+
+  /* Make Export CSV button pulse green */
+  document.getElementById("export-btn").classList.add("pulse");
+
+  /* Auto-hide the overlay after 6 seconds (button keeps pulsing) */
+  setTimeout(() => overlay.classList.remove("visible"), 6000);
+}
+
+/* ── Source switching ────────────────────────────────────────────── */
+function switchToWebcam() {
+  _resetScanState();
+  setActiveSource("webcam");
+  document.getElementById("src-chip").textContent = "📷  WEBCAM";
+  document.getElementById("timeline").classList.remove("visible");
+  apiFetch("/api/source", "POST", { source: "0" });
+}
+
+function switchToFile() {
+  document.getElementById("file-input").click();
+}
+
+function setActiveSource(mode) {
+  document.getElementById("btn-webcam").classList.toggle("active", mode === "webcam");
+  document.getElementById("btn-file").classList.toggle("active",   mode === "file");
+}
+
+function _resetScanState() {
+  _scanDone = false;
+  document.getElementById("scan-overlay").classList.remove("visible");
+  document.getElementById("export-btn").classList.remove("pulse");
+  document.getElementById("tl-fill").classList.remove("done");
+  document.getElementById("tl-fill").style.width = "0%";
+  document.getElementById("tl-ticks").innerHTML  = "";
+  document.getElementById("tl-time").textContent = "00:00 / 00:00";
+  document.getElementById("tl-status").classList.remove("done");
+  document.getElementById("tl-status-text").textContent = "SCANNING";
+}
+
+/* ── File upload ─────────────────────────────────────────────────── */
+async function handleFileUpload(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  _resetScanState();
+
+  const overlay  = document.getElementById("upload-overlay");
+  const progText = document.getElementById("upload-prog");
+  overlay.classList.add("visible");
+  progText.textContent = "0%";
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener("progress", e => {
+        if (e.lengthComputable)
+          progText.textContent = Math.round(e.loaded / e.total * 100) + "%";
+      });
+      xhr.addEventListener("load", () =>
+        xhr.status === 200 ? resolve() : reject(new Error("HTTP " + xhr.status)));
+      xhr.addEventListener("error", () => reject(new Error("Network error")));
+      xhr.open("POST", "/api/upload");
+      xhr.send(formData);
+    });
+
+    setActiveSource("file");
+    const name = file.name.length > 30 ? file.name.slice(0, 27) + "…" : file.name;
+    document.getElementById("src-chip").textContent = "📁  " + name.toUpperCase();
+
+  } catch (err) {
+    console.error("[Upload]", err);
+    alert("Upload failed: " + err.message);
+  } finally {
+    overlay.classList.remove("visible");
+    input.value = "";
+  }
+}
+
+/* ── Slider controls ─────────────────────────────────────────────── */
+function updateConf(v) {
+  document.getElementById("conf-val").textContent = parseFloat(v).toFixed(2);
+  apiFetch("/api/config", "POST", { conf: parseFloat(v) });
+}
+function updateIou(v) {
+  document.getElementById("iou-val").textContent  = parseFloat(v).toFixed(2);
+  apiFetch("/api/config", "POST", { iou: parseFloat(v) });
+}
+
+/* ── Helpers ─────────────────────────────────────────────────────── */
+function toTime(frames, fps) {
+  const secs = Math.floor(frames / (fps || 30));
+  const m    = Math.floor(secs / 60);
+  const s    = secs % 60;
+  return String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
+}
+
+async function apiFetch(url, method, body) {
+  try {
+    await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) { console.warn("[apiFetch]", url, e.message); }
+}
+</script>
+</body>
+</html>
